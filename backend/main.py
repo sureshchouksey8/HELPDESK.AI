@@ -71,41 +71,41 @@ from backend.services.sla_service import (
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
-def get_system_settings(company_id: str) -> dict:
+def get_system_settings(tenant_id: str) -> dict:
     defaults = {
         "ai_confidence_threshold": 0.80,
         "duplicate_sensitivity": 0.85,
         "enable_auto_resolve": False
     }
-    if not supabase or not company_id:
+    if not supabase or not tenant_id:
         return defaults
     try:
         res = supabase.table("system_settings").select(
             "ai_confidence_threshold, duplicate_sensitivity, enable_auto_resolve"
-        ).eq("company_id", company_id).single().execute()
+        ).eq("tenant_id", tenant_id).single().execute()
         if res.data:
             return {**defaults, **res.data}
     except Exception as e:
-        print(f"[WARNING] Could not fetch system_settings for company_id={company_id}: {e}")
+        print(f"[WARNING] Could not fetch system_settings for tenant_id={tenant_id}: {e}")
     return defaults
 
 
-def get_duplicate_threshold(company_id: str | None, fallback: float = 0.85) -> float:
-    if not company_id:
+def get_duplicate_threshold(tenant_id: str | None, fallback: float = 0.85) -> float:
+    if not tenant_id:
         return fallback
-    settings = get_system_settings(company_id)
+    settings = get_system_settings(tenant_id)
     try:
         return float(settings.get("duplicate_sensitivity", fallback))
     except (TypeError, ValueError):
         return fallback
 
 
-def detect_semantic_duplicate(text: str, *, company_id: str | None, threshold: float) -> dict:
+def detect_semantic_duplicate(text: str, *, tenant_id: str | None, threshold: float) -> dict:
     try:
         return duplicate_service.find_semantic_duplicate(
             text,
             threshold=threshold,
-            company_id=company_id,
+            tenant_id=tenant_id,
             supabase_client=supabase,
         )
     except Exception as error:
@@ -120,7 +120,7 @@ class TicketRequest(BaseModel):
     image_text: str = "" # Keep for backward compatibility
     user_id: str | None = None
     company: str | None = None
-    company_id: str | None = None
+    tenant_id: str | None = None
     image_url: str | None = None
     confidence_threshold: float = 0.20
     duplicate_sensitivity: float = 0.85
@@ -139,7 +139,7 @@ class TicketSaveRequest(BaseModel):
     confidence: float
     image_url: str | None = None
     company: str | None = None
-    company_id: str | None = None
+    tenant_id: str | None = None
     description_vector: list[float] | None = None
     is_potential_duplicate: bool = False
     parent_ticket_id: str | None = None
@@ -602,35 +602,34 @@ async def log_correction(raw_request: Request):
 # Ticket operations (Now via Supabase)
 # ---------------------------------------------------------------------------
 @app.get("/tickets")
-async def get_tickets(company_id: str | None = None):
+async def get_tickets(tenant_id: str):
     """Fetch persistent tickets from Supabase."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
     
     query = supabase.table("tickets").select("*").order("created_at", desc=True)
-    if company_id:
-        query = query.eq("company_id", company_id)
+    query = query.eq("tenant_id", tenant_id)
         
     res = query.execute()
     return res.data
 
 @app.get("/tickets/search")
-async def search_tickets(q: str | None = None, company_id: str | None = None, limit: int = 50, offset: int = 0):
+async def search_tickets(q: str | None = None, tenant_id: str, limit: int = 50, offset: int = 0):
     """Search tickets using tenant-safe full-text search."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
 
     if not q:
         raise HTTPException(status_code=400, detail="Search query is required")
-    if not company_id:
-        raise HTTPException(status_code=400, detail="company_id is required for tenant-safe search")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="tenant_id is required for tenant-safe search")
 
     try:
         result = supabase.rpc(
             "search_tickets",
             {
                 "query_text": q,
-                "company_id": company_id,
+                "tenant_id": tenant_id,
                 "limit_rows": limit,
                 "offset_rows": offset,
             },
@@ -658,7 +657,7 @@ async def save_ticket(request_body: TicketSaveRequest):
             try:
                 profile_res = (
                     supabase.table("profiles")
-                    .select("company_id, company")
+                    .select("tenant_id, company")
                     .eq("id", request_body.user_id)
                     .single()
                     .execute()
@@ -667,8 +666,8 @@ async def save_ticket(request_body: TicketSaveRequest):
                 if not profile:
                     raise HTTPException(status_code=404, detail="User profile not found")
                 
-                # SELF-HEALING: If company_id is null in database but company name exists, resolve it!
-                if not profile.get("company_id") and profile.get("company"):
+                # SELF-HEALING: If tenant_id is null in database but company name exists, resolve it!
+                if not profile.get("tenant_id") and profile.get("company"):
                     try:
                         comp_name = profile.get("company").strip()
                         comp_res = (
@@ -678,13 +677,13 @@ async def save_ticket(request_body: TicketSaveRequest):
                             .execute()
                         )
                         if comp_res.data:
-                            resolved_company_id = comp_res.data[0]["id"]
+                            resolved_tenant_id = comp_res.data[0]["id"]
                             # Backfill the profile table in real-time
-                            supabase.table("profiles").update({"company_id": resolved_company_id}).eq("id", request_body.user_id).execute()
-                            profile["company_id"] = resolved_company_id
-                            logger.info(f"[SELF-HEALING] Backfilled company_id={resolved_company_id} for user={request_body.user_id}")
+                            supabase.table("profiles").update({"tenant_id": resolved_tenant_id}).eq("id", request_body.user_id).execute()
+                            profile["tenant_id"] = resolved_tenant_id
+                            logger.info(f"[SELF-HEALING] Backfilled tenant_id={resolved_tenant_id} for user={request_body.user_id}")
                     except Exception as healing_err:
-                        logger.warning(f"[SELF-HEALING WARNING] Failed to backfill company_id: {healing_err}")
+                        logger.warning(f"[SELF-HEALING WARNING] Failed to backfill tenant_id: {healing_err}")
             except HTTPException:
                 raise
             except Exception as profile_error:
@@ -693,16 +692,16 @@ async def save_ticket(request_body: TicketSaveRequest):
                 raise HTTPException(status_code=503, detail="Failed to resolve tenant linkage") from profile_error
 
         # Validate tenant consistency and authorization.
-        profile_company_id = profile.get("company_id")
-        if final_data.get("company_id"):
-            # User provided company_id: verify it matches their profile.
-            if profile_company_id and final_data["company_id"] != profile_company_id:
+        profile_tenant_id = profile.get("tenant_id")
+        if final_data.get("tenant_id"):
+            # User provided tenant_id: verify it matches their profile.
+            if profile_tenant_id and final_data["tenant_id"] != profile_tenant_id:
                 user_hash = hashlib.sha256(str(request_body.user_id).encode()).hexdigest()[:8]
-                logger.warning(f"Tenant mismatch: user {user_hash} attempted {final_data['company_id']}, assigned to {profile_company_id}")
+                logger.warning(f"Tenant mismatch: user {user_hash} attempted {final_data['tenant_id']}, assigned to {profile_tenant_id}")
                 raise HTTPException(status_code=403, detail="User not authorized for this tenant")
-        elif profile_company_id:
-            # Backfill company_id from profile.
-            final_data["company_id"] = profile_company_id
+        elif profile_tenant_id:
+            # Backfill tenant_id from profile.
+            final_data["tenant_id"] = profile_tenant_id
         elif request_body.user_id:
             # User has no tenant assignment.
             raise HTTPException(status_code=400, detail="User has no tenant assignment")
@@ -721,10 +720,10 @@ async def save_ticket(request_body: TicketSaveRequest):
 
         import hashlib
         user_hash = hashlib.sha256(str(request_body.user_id).encode()).hexdigest()[:8]
-        logger.info(f"Tenant linkage: user_hash={user_hash}, company_id={final_data.get('company_id')}")
+        logger.info(f"Tenant linkage: user_hash={user_hash}, tenant_id={final_data.get('tenant_id')}")
 
         duplicate_text = (request_body.description or "").strip() or (request_body.subject or "").strip()
-        duplicate_threshold = get_duplicate_threshold(final_data.get("company_id"), 0.85)
+        duplicate_threshold = get_duplicate_threshold(final_data.get("tenant_id"), 0.85)
         duplicate_result = {
             "is_duplicate": False,
             "duplicate_ticket_id": None,
@@ -736,7 +735,7 @@ async def save_ticket(request_body: TicketSaveRequest):
         if duplicate_text:
             duplicate_result = detect_semantic_duplicate(
                 duplicate_text,
-                company_id=final_data.get("company_id"),
+                tenant_id=final_data.get("tenant_id"),
                 threshold=duplicate_threshold,
             )
             final_data["description_vector"] = duplicate_service.generate_embedding(duplicate_text)
@@ -752,7 +751,7 @@ async def save_ticket(request_body: TicketSaveRequest):
         VALID_TICKET_COLUMNS = {
             "user_id", "subject", "description", "category", "subcategory",
             "priority", "assigned_team", "status", "auto_resolve", "is_duplicate",
-            "confidence", "image_url", "company", "company_id", "sla_breach_at", "metadata",
+            "confidence", "image_url", "company", "tenant_id", "sla_breach_at", "metadata",
         }
         # Merge any extra telemetry and SLA/duplicate fields into metadata before filtering
         existing_metadata = final_data.get("metadata") or {}
@@ -868,7 +867,7 @@ async def analyze_ticket(request_body: TicketRequest, request: Request):
     """
     text = request_body.text
 
-    settings = get_system_settings(request_body.company_id)
+    settings = get_system_settings(request_body.tenant_id)
     confidence_threshold = settings["ai_confidence_threshold"]
     duplicate_sensitivity = settings["duplicate_sensitivity"]
     enable_auto_resolve = settings["enable_auto_resolve"]
@@ -1023,11 +1022,11 @@ async def analyze_only(request_body: TicketRequest):
     timeline["metadata_harvested"] = get_now_ist()
 
     # --- Duplicate detection ---
-    duplicate_threshold = get_duplicate_threshold(request_body.company_id, duplicate_sensitivity)
+    duplicate_threshold = get_duplicate_threshold(request_body.tenant_id, duplicate_sensitivity)
     try:
         dup_result = detect_semantic_duplicate(
             text,
-            company_id=request_body.company_id,
+            tenant_id=request_body.tenant_id,
             threshold=duplicate_threshold,
         )
     except Exception:
@@ -1124,7 +1123,7 @@ async def analyze_stream(request_body: TicketRequest):
             "api_endpoint": "/ai/analyze_stream"
         }
         timeline = {"received": get_now_ist()} 
-        settings = get_system_settings(request_body.company_id)
+        settings = get_system_settings(request_body.tenant_id)
         confidence_threshold = settings["ai_confidence_threshold"]
         duplicate_sensitivity = settings["duplicate_sensitivity"]
         enable_auto_resolve = settings["enable_auto_resolve"]
@@ -1189,10 +1188,10 @@ async def analyze_stream(request_body: TicketRequest):
         yield f"data: {json.dumps({'step': 'Checking duplicate issues', 'status': 'in_progress'})}\n\n"
         await asyncio.sleep(0.2)
         try:
-            duplicate_threshold = get_duplicate_threshold(request_body.company_id, duplicate_sensitivity)
+            duplicate_threshold = get_duplicate_threshold(request_body.tenant_id, duplicate_sensitivity)
             dup_result = detect_semantic_duplicate(
                 text,
-                company_id=request_body.company_id,
+                tenant_id=request_body.tenant_id,
                 threshold=duplicate_threshold,
             )
         except Exception:

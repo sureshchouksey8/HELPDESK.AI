@@ -42,12 +42,12 @@ class AutoCloseService:
         self.default_auto_close_days = int(os.getenv("AUTO_CLOSE_DAYS", "7"))
         self.cron_schedule = os.getenv("AUTO_CLOSE_CRON_SCHEDULE", "0 2 * * *")  # 2 AM UTC daily
 
-    def get_system_settings(self, company_id: str) -> Dict:
+    def get_system_settings(self, tenant_id: str) -> Dict:
         """
         Fetch company's auto-close settings from database.
         
         Args:
-            company_id: UUID of the company
+            tenant_id: UUID of the company
             
         Returns:
             Dict with auto_close_days and auto_close_enabled settings.
@@ -56,7 +56,7 @@ class AutoCloseService:
         try:
             response = self.supabase.table("system_settings").select(
                 "auto_close_days, auto_close_enabled"
-            ).eq("company_id", company_id).single().execute()
+            ).eq("tenant_id", tenant_id).single().execute()
             
             if response.data:
                 return {
@@ -64,7 +64,7 @@ class AutoCloseService:
                     "auto_close_enabled": response.data.get("auto_close_enabled", True)
                 }
         except Exception as e:
-            logger.warning(f"Could not fetch settings for company {company_id}: {str(e)}. Using defaults.")
+            logger.warning(f"Could not fetch settings for company {tenant_id}: {str(e)}. Using defaults.")
         
         # Fall back to defaults
         return {
@@ -74,13 +74,13 @@ class AutoCloseService:
 
 # NOTE: Method renamed to `get_system_settings` to match schema; underlying DB table is `system_settings`.
 
-    def _close_ticket(self, ticket_id: str, company_id: str, stats: Dict) -> bool:
+    def _close_ticket(self, ticket_id: str, tenant_id: str, stats: Dict) -> bool:
         """
         Update a ticket's status to closed and set auto_closed flag.
         
         Args:
             ticket_id: UUID of ticket to close
-            company_id: UUID of ticket's company
+            tenant_id: UUID of ticket's company
             stats: Statistics dict to track success/failure
             
         Returns:
@@ -91,10 +91,10 @@ class AutoCloseService:
                 "status": "closed",
                 "auto_closed": True,
                 "closed_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", ticket_id).eq("company_id", company_id).execute()
+            }).eq("id", ticket_id).eq("tenant_id", tenant_id).execute()
             
             stats["closed_count"] += 1
-            logger.info(f"Closed ticket {ticket_id} for company {company_id}")
+            logger.info(f"Closed ticket {ticket_id} for company {tenant_id}")
             return True
         except Exception as e:
             stats["error_count"] += 1
@@ -107,7 +107,7 @@ class AutoCloseService:
         
         Process:
         1. Fetch all resolved tickets
-        2. Group by company_id
+        2. Group by tenant_id
         3. For each company, check auto-close settings
         4. Close tickets older than auto_close_days
         5. Log results and return statistics
@@ -131,7 +131,7 @@ class AutoCloseService:
 
             # Fetch all resolved tickets
             response = self.supabase.table("tickets").select(
-                "id, company_id, status, updated_at"
+                "id, tenant_id, status, updated_at"
             ).eq("status", "resolved").execute()
 
             resolved_tickets = response.data if response.data else []
@@ -141,18 +141,18 @@ class AutoCloseService:
             # Group by company
             company_tickets: Dict[str, List] = {}
             for ticket in resolved_tickets:
-                company_id = ticket.get("company_id")
-                if company_id not in company_tickets:
-                    company_tickets[company_id] = []
-                company_tickets[company_id].append(ticket)
+                tenant_id = ticket.get("tenant_id")
+                if tenant_id not in company_tickets:
+                    company_tickets[tenant_id] = []
+                company_tickets[tenant_id].append(ticket)
 
             # Process each company's tickets
-            for company_id, tickets in company_tickets.items():
+            for tenant_id, tickets in company_tickets.items():
                 try:
-                    settings = self.get_system_settings(company_id)
+                    settings = self.get_system_settings(tenant_id)
 
                     if not settings["auto_close_enabled"]:
-                        logger.info(f"Auto-close disabled for company {company_id}, skipping {len(tickets)} tickets")
+                        logger.info(f"Auto-close disabled for company {tenant_id}, skipping {len(tickets)} tickets")
                         stats["skipped_count"] += len(tickets)
                         continue
 
@@ -171,7 +171,7 @@ class AutoCloseService:
                             updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
 
                             if updated_at < cutoff_date:
-                                self._close_ticket(ticket["id"], company_id, stats)
+                                self._close_ticket(ticket["id"], tenant_id, stats)
                             else:
                                 stats["skipped_count"] += 1
 
@@ -180,7 +180,7 @@ class AutoCloseService:
                             stats["error_count"] += 1
 
                 except Exception as e:
-                    logger.error(f"Error processing company {company_id}: {str(e)}")
+                    logger.error(f"Error processing company {tenant_id}: {str(e)}")
                     stats["error_count"] += len(tickets)
 
             logger.info(
@@ -203,7 +203,7 @@ class AutoCloseService:
         """
         try:
             response = self.supabase.table("tickets").select(
-                "id, company_id, status, updated_at, title"
+                "id, tenant_id, status, updated_at, title"
             ).eq("status", "resolved").limit(10).execute()
 
             tickets = response.data if response.data else []

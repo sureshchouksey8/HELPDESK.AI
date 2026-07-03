@@ -155,7 +155,7 @@ class SlaEscalationService:
         response = (
             self.supabase.table("tickets")
             .select(
-                "id, company_id, company, status, priority, subject, assigned_team, "
+                "id, tenant_id, company, status, priority, subject, assigned_team, "
                 "sla_breach_at, sla_status, escalation_level"
             )
             .execute()
@@ -171,7 +171,7 @@ class SlaEscalationService:
 
     def _breach_ticket(self, ticket: dict[str, Any], now: datetime) -> None:
         ticket_id = str(ticket.get("id"))
-        company_id = ticket.get("company_id")
+        tenant_id = ticket.get("tenant_id")
         escalation_level = int(ticket.get("escalation_level") or 0) + 1
         timestamp = now.isoformat().replace("+00:00", "Z")
 
@@ -187,9 +187,9 @@ class SlaEscalationService:
         self._emit_system_message(ticket, escalation_level, timestamp)
 
         logger.warning(
-            "SLA breached | ticket_id=%s | company_id=%s | priority=%s | level=%s",
+            "SLA breached | ticket_id=%s | tenant_id=%s | priority=%s | level=%s",
             ticket_id,
-            company_id or "unknown",
+            tenant_id or "unknown",
             ticket.get("priority") or "unknown",
             escalation_level,
         )
@@ -200,7 +200,7 @@ class SlaEscalationService:
             {
                 "event_type": "sla_breached",
                 "ticket_id": ticket_id,
-                "company_id": ticket.get("company_id"),
+                "tenant_id": ticket.get("tenant_id"),
                 "actor_type": "system",
                 "message": "SLA breached and escalation triggered.",
                 "metadata": {
@@ -242,13 +242,13 @@ class SlaEscalationService:
     def _should_send_admin_alert(self, ticket: dict[str, Any]) -> bool:
         if not self.notification_router:
             return True
-        company_id = ticket.get("company_id")
-        if not company_id:
+        tenant_id = ticket.get("tenant_id")
+        if not tenant_id:
             return True
         try:
-            return bool(self.notification_router.should_send_admin_alert(str(company_id)))
+            return bool(self.notification_router.should_send_admin_alert(str(tenant_id)))
         except Exception as exc:
-            logger.warning("Notification router failed open for company %s: %s", company_id, exc)
+            logger.warning("Notification router failed open for company %s: %s", tenant_id, exc)
             return True
 
 

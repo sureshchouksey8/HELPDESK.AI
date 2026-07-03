@@ -128,7 +128,7 @@ class DuplicateService:
         text: str,
         *,
         threshold: float | None = None,
-        company_id: str | None = None,
+        tenant_id: str | None = None,
         supabase_client: Any | None = None,
         match_count: int = 1,
     ) -> dict:
@@ -138,7 +138,7 @@ class DuplicateService:
         active_threshold = threshold if threshold is not None else SIMILARITY_THRESHOLD
         embedding = self.generate_embedding(text)
 
-        if embedding and supabase_client and company_id:
+        if embedding and supabase_client and tenant_id:
             try:
                 response = supabase_client.rpc(
                     "match_tickets",
@@ -146,7 +146,7 @@ class DuplicateService:
                         "query_vector": embedding,
                         "match_threshold": float(active_threshold),
                         "match_count": match_count,
-                        "tenant_company_id": company_id,
+                        "tenant_tenant_id": tenant_id,
                     },
                 ).execute()
 

@@ -58,12 +58,12 @@ class NotificationRoutingMiddleware:
         self._settings_cache: Dict[str, Dict] = {}
         self.log_level = os.getenv("NOTIFICATION_ROUTING_LOG_LEVEL", "info").lower()
 
-    def _fetch_system_settings(self, company_id: str) -> Dict:
+    def _fetch_system_settings(self, tenant_id: str) -> Dict:
         """
         Fetch company settings from database.
         
         Args:
-            company_id: UUID of company
+            tenant_id: UUID of company
             
         Returns:
             Dict with `email_notifications`, `admin_alerts`, `digest_frequency`
@@ -71,7 +71,7 @@ class NotificationRoutingMiddleware:
         try:
             response = self.supabase.table("system_settings").select(
                 "email_notifications, admin_alerts, digest_frequency"
-            ).eq("company_id", company_id).single().execute()
+            ).eq("tenant_id", tenant_id).single().execute()
 
             if response.data:
                 return {
@@ -80,7 +80,7 @@ class NotificationRoutingMiddleware:
                     "digest_frequency": response.data.get("digest_frequency", "daily")
                 }
         except Exception as e:
-            logger.warning(f"Could not fetch company settings for {company_id}: {str(e)}")
+            logger.warning(f"Could not fetch company settings for {tenant_id}: {str(e)}")
 
         # Fail-open: allow notifications if settings unavailable
         return {
@@ -89,37 +89,37 @@ class NotificationRoutingMiddleware:
             "digest_frequency": "daily"
         }
 
-    def get_system_settings(self, company_id: str) -> Dict:
+    def get_system_settings(self, tenant_id: str) -> Dict:
         """
         Get company settings with caching.
         
         Args:
-            company_id: UUID of company
+            tenant_id: UUID of company
             
         Returns:
             Dict with company notification preferences
         """
-        if company_id not in self._settings_cache:
-            self._settings_cache[company_id] = self._fetch_system_settings(company_id)
-        return self._settings_cache[company_id]
+        if tenant_id not in self._settings_cache:
+            self._settings_cache[tenant_id] = self._fetch_system_settings(tenant_id)
+        return self._settings_cache[tenant_id]
 
-    def should_send_email_notification(self, company_id: str, notification_type: NotificationType) -> bool:
+    def should_send_email_notification(self, tenant_id: str, notification_type: NotificationType) -> bool:
         """
         Check if email notification should be sent for this company.
         
         Args:
-            company_id: UUID of company
+            tenant_id: UUID of company
             notification_type: Type of notification to send
             
         Returns:
             True if notification should be sent, False otherwise
         """
-        settings = self.get_system_settings(company_id)
+        settings = self.get_system_settings(tenant_id)
 
         # Gate on global email notifications setting
         if not settings["email_notifications"]:
             self.log_notification_skipped(
-                company_id, notification_type, "email_notifications_disabled"
+                tenant_id, notification_type, "email_notifications_disabled"
             )
             return False
 
@@ -129,100 +129,100 @@ class NotificationRoutingMiddleware:
             
             if digest_frequency == "disabled":
                 self.log_notification_skipped(
-                    company_id, notification_type, "digest_frequency_disabled"
+                    tenant_id, notification_type, "digest_frequency_disabled"
                 )
                 return False
 
             if notification_type == NotificationType.WEEKLY_DIGEST and digest_frequency == "daily":
                 self.log_notification_skipped(
-                    company_id, notification_type, "digest_frequency_mismatch"
+                    tenant_id, notification_type, "digest_frequency_mismatch"
                 )
                 return False
 
-        self.log_notification_sent(company_id, notification_type)
+        self.log_notification_sent(tenant_id, notification_type)
         return True
 
-    def should_send_admin_alert(self, company_id: str) -> bool:
+    def should_send_admin_alert(self, tenant_id: str) -> bool:
         """
         Check if admin alert/escalation should be sent for this company.
         
         Args:
-            company_id: UUID of company
+            tenant_id: UUID of company
             
         Returns:
             True if alert should be sent, False otherwise
         """
-        settings = self.get_system_settings(company_id)
+        settings = self.get_system_settings(tenant_id)
 
         if not settings["admin_alerts"]:
             self.log_notification_skipped(
-                company_id, NotificationType.ADMIN_ALERT, "admin_alerts_disabled"
+                tenant_id, NotificationType.ADMIN_ALERT, "admin_alerts_disabled"
             )
             return False
 
-        self.log_notification_sent(company_id, NotificationType.ADMIN_ALERT)
+        self.log_notification_sent(tenant_id, NotificationType.ADMIN_ALERT)
         return True
 
-    def should_send_push_notification(self, company_id: str) -> bool:
+    def should_send_push_notification(self, tenant_id: str) -> bool:
         """
         Check if push notification should be sent for this company.
         
         Args:
-            company_id: UUID of company
+            tenant_id: UUID of company
             
         Returns:
             True if notification should be sent, False otherwise
         """
-        settings = self.get_system_settings(company_id)
+        settings = self.get_system_settings(tenant_id)
 
         # Push notifications typically gated by email_notifications
         if not settings["email_notifications"]:
             self.log_notification_skipped(
-                company_id, NotificationType.PUSH_NOTIFICATION, "notifications_disabled"
+                tenant_id, NotificationType.PUSH_NOTIFICATION, "notifications_disabled"
             )
             return False
 
-        self.log_notification_sent(company_id, NotificationType.PUSH_NOTIFICATION)
+        self.log_notification_sent(tenant_id, NotificationType.PUSH_NOTIFICATION)
         return True
 
-    def log_notification_sent(self, company_id: str, notification_type: NotificationType) -> None:
+    def log_notification_sent(self, tenant_id: str, notification_type: NotificationType) -> None:
         """Log that a notification was sent."""
         if self.log_level in ["debug", "info"]:
             logger.info(
-                f"Notification sent | company={company_id} | type={notification_type.value} | "
+                f"Notification sent | company={tenant_id} | type={notification_type.value} | "
                 f"timestamp={datetime.now(timezone.utc).isoformat()}"
             )
 
     def log_notification_skipped(
-        self, company_id: str, notification_type: NotificationType, reason: str
+        self, tenant_id: str, notification_type: NotificationType, reason: str
     ) -> None:
         """Log that a notification was skipped."""
         if self.log_level in ["debug", "info", "warning"]:
             logger.warning(
-                f"Notification skipped | company={company_id} | type={notification_type.value} | "
+                f"Notification skipped | company={tenant_id} | type={notification_type.value} | "
                 f"reason={reason} | timestamp={datetime.now(timezone.utc).isoformat()}"
             )
 
     def log_notification_error(
-        self, company_id: str, notification_type: NotificationType, error: Exception
+        self, tenant_id: str, notification_type: NotificationType, error: Exception
     ) -> None:
         """Log notification sending error."""
         logger.error(
-            f"Notification error | company={company_id} | type={notification_type.value} | "
+            f"Notification error | company={tenant_id} | type={notification_type.value} | "
             f"error={str(error)} | timestamp={datetime.now(timezone.utc).isoformat()}"
         )
 
-    def invalidate_cache(self, company_id: str) -> None:
+    def invalidate_cache(self, tenant_id: str) -> None:
         """
         Invalidate cached settings for a company.
         Call this after updating system_settings in DB.
         
         Args:
-            company_id: UUID of company
+            tenant_id: UUID of company
         """
-        if company_id in self._settings_cache:
-            del self._settings_cache[company_id]
-            logger.info(f"Invalidated settings cache for company {company_id}")
+        if tenant_id in self._settings_cache:
+            del self._settings_cache[tenant_id]
+            logger.info(f"Invalidated settings cache for company {tenant_id}")
 
 
 # Singleton instance

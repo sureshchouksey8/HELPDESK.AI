@@ -96,7 +96,7 @@ class SlaServiceTest(unittest.TestCase):
             "tickets": [
                 {
                     "id": "ticket-1",
-                    "company_id": "company-1",
+                    "tenant_id": "company-1",
                     "status": "open",
                     "priority": "critical",
                     "subject": "VPN outage",
@@ -107,7 +107,7 @@ class SlaServiceTest(unittest.TestCase):
                 },
                 {
                     "id": "ticket-2",
-                    "company_id": "company-1",
+                    "tenant_id": "company-1",
                     "status": "resolved",
                     "priority": "critical",
                     "subject": "Closed incident",
@@ -118,7 +118,7 @@ class SlaServiceTest(unittest.TestCase):
                 },
                 {
                     "id": "ticket-3",
-                    "company_id": "company-1",
+                    "tenant_id": "company-1",
                     "status": "open",
                     "priority": "high",
                     "subject": "Future incident",

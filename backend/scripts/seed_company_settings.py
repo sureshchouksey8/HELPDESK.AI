@@ -57,7 +57,7 @@ def seed_company_settings():
         logger.info("Fetching all unique companies from tickets table...")
         
         companies_response = supabase.table("tickets").select(
-            "company_id", count="exact"
+            "tenant_id", count="exact"
         ).execute()
         
         if not companies_response.data:
@@ -67,9 +67,9 @@ def seed_company_settings():
         # Extract unique company IDs
         companies = {}
         for ticket in companies_response.data:
-            company_id = ticket.get("company_id")
-            if company_id and company_id not in companies:
-                companies[company_id] = True
+            tenant_id = ticket.get("tenant_id")
+            if tenant_id and tenant_id not in companies:
+                companies[tenant_id] = True
         
         unique_companies = list(companies.keys())
         logger.info(f"Found {len(unique_companies)} unique companies")
@@ -78,13 +78,13 @@ def seed_company_settings():
         logger.info("Fetching existing system_settings...")
         
         existing_response = supabase.table("system_settings").select(
-            "company_id"
+            "tenant_id"
         ).execute()
         
         existing_companies = set()
         if existing_response.data:
             for setting in existing_response.data:
-                existing_companies.add(setting.get("company_id"))
+                existing_companies.add(setting.get("tenant_id"))
         
         logger.info(f"Found {len(existing_companies)} existing system_settings")
         
@@ -100,11 +100,11 @@ def seed_company_settings():
         created_count = 0
         error_count = 0
         
-        for company_id in companies_to_create:
+        for tenant_id in companies_to_create:
             try:
                 # Create default settings record
                 supabase.table("system_settings").insert({
-                    "company_id": company_id,
+                    "tenant_id": tenant_id,
                     "auto_close_enabled": True,
                     "auto_close_days": 7,
                     "email_notifications": True,
@@ -113,11 +113,11 @@ def seed_company_settings():
                 }).execute()
                 
                 created_count += 1
-                logger.debug(f"Created settings for company {company_id}")
+                logger.debug(f"Created settings for company {tenant_id}")
                 
             except Exception as e:
                 error_count += 1
-                logger.error(f"Failed to create settings for company {company_id}: {str(e)}")
+                logger.error(f"Failed to create settings for company {tenant_id}: {str(e)}")
         
         # Step 5: Verify results
         logger.info(f"Seed complete: {created_count} created, {error_count} errors")
@@ -147,15 +147,15 @@ def verify_seed():
     try:
         # Get counts
         companies_response = supabase.table("tickets").select(
-            "company_id", count="exact"
+            "tenant_id", count="exact"
         ).execute()
         
         settings_response = supabase.table("system_settings").select(
-            "company_id", count="exact"
+            "tenant_id", count="exact"
         ).execute()
         
-        companies_count = len(set(t["company_id"] for t in companies_response.data if t.get("company_id")))
-        settings_count = len(set(s["company_id"] for s in settings_response.data if s.get("company_id")))
+        companies_count = len(set(t["tenant_id"] for t in companies_response.data if t.get("tenant_id")))
+        settings_count = len(set(s["tenant_id"] for s in settings_response.data if s.get("tenant_id")))
         
         logger.info(f"Verification: {companies_count} unique companies, {settings_count} system_settings")
         
